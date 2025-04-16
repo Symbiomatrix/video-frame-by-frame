@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Frame Viewer for WebP and MP4</title>
+  <style>
+    body {
+      font-family: monospace;
+      text-align: center;
+      padding: 1rem;
+      margin: 0;
+      background: #111;
+      color: #eee;
+      overflow-x: hidden;
+    }
+    .canvas-container {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 20px;
+      margin: 20px 0;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .canvas-wrapper {
+      width: 45%;
+      height: 45vh;
+      position: relative;
+      overflow: hidden;
+      border: 1px solid #888;
+      background: #000;
+      box-sizing: border-box;
+    }
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      cursor: grab;
+    }
+    canvas:active {
+      cursor: grabbing;
+    }
+    button, input {
+      margin: 0.5rem;
+      padding: 0.4rem 0.8rem;
+      font-size: 1rem;
+    }
+    input[type="range"] {
+      width: 200px;
+    }
+    input[type="number"] {
+      width: 60px;
+    }
+    #frameInfo, #autoplayInfo {
+      font-size: 1rem;
+      color: #fff;
+    }
+    .frame-controls {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin: 10px 0;
+      flex-wrap: wrap;
+    }
+    #fileInput {
+      max-width: 90%;
+    }
+    .settings-controls {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      margin: 10px 0;
+      flex-wrap: wrap;
+    }
+    .control-group {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 5px;
+    }
+    .control-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Frame Viewer for WebP and MP4</h1>
+  <input type="file" id="fileInput" accept="image/webp,video/mp4"><br>
+
+  <div class="frame-controls">
+    <button id="prevButton" onmousedown="startPress('prev')" onmouseup="endPress('prev')" onmouseleave="endPress('prev')">⏮ Prev</button>
+    <button id="nextButton" onmousedown="startPress('next')" onmouseup="endPress('next')" onmouseleave="endPress('next')">Next ⏭</button>
+    <label>
+      Frame: <span id="currentFrameLabel">1</span>/<span id="totalFramesLabel">0</span>
+    </label>
+  </div>
+  
+  <div class="frame-controls">
+    <input type="range" id="frameSlider" min="1" value="1" step="1">
+  </div>
+
+  <!-- Settings controls -->
+  <div class="settings-controls">
+    <div class="control-group">
+      <h3>Zoom Settings</h3>
+      <div class="control-row">
+        <label>Min:</label>
+        <input type="number" id="minZoomInput" min="0.01" max="1" step="0.01" value="0.1">
+        <input type="range" id="minZoomRange" min="0.01" max="1" step="0.01" value="0.1">
+      </div>
+      <div class="control-row">
+        <label>Max:</label>
+        <input type="number" id="maxZoomInput" min="1" max="20" step="0.5" value="5">
+        <input type="range" id="maxZoomRange" min="1" max="20" step="0.5" value="5">
+      </div>
+    </div>
+    
+    <div class="control-group">
+      <h3>Playback Settings</h3>
+      <div class="control-row">
+        <label>FPS:</label>
+        <input type="number" id="fpsInput" min="1" max="120" step="1" value="10">
+        <input type="range" id="fpsRange" min="1" max="60" value="10">
+      </div>
+      <div class="control-row">
+        <label>Max FPS:</label>
+        <input type="number" id="maxFpsInput" min="1" max="240" step="1" value="60">
+      </div>
+    </div>
+  </div>
+
+  <!-- Canvas containers side by side -->
+  <div class="canvas-container">
+    <div>
+      <h2>Manual Control</h2>
+      <div class="canvas-wrapper">
+        <canvas id="manualCanvas"></canvas>
+      </div>
+    </div>
+
+    <div>
+      <h2>Autoplay</h2>
+      <div class="canvas-wrapper">
+        <canvas id="autoplayCanvas"></canvas>
+      </div>
+      <div id="autoplayInfo">Playing Frame 0 / 0</div>
+    </div>
+  </div>
+
+  <div class="frame-controls">
+    <button id="downloadButton">Download Current Frame</button>
+  </div>
+
+  <script>
+    let frames = [], delays = [];
+    let currentFrame = 0, autoFrame = 0;
+    let fps = 10, maxFps = 60, autoplayTimer;
+    let fastInterval = null, pressTimer = null, isPressing = false;
+    let isWebP = false;
+    let minZoom = 0.1;
+    let maxZoom = 5;
+
+    // DOM elements
+    const currentFrameLabel = document.getElementById('currentFrameLabel');
+    const totalFramesLabel = document.getElementById('totalFramesLabel');
+    const frameSlider = document.getElementById('frameSlider');
+    const autoplayInfo = document.getElementById('autoplayInfo');
+    
+    // Zoom controls
+    const minZoomInput = document.getElementById('minZoomInput');
+    const maxZoomInput = document.getElementById('maxZoomInput');
+    const minZoomRange = document.getElementById('minZoomRange');
+    const maxZoomRange = document.getElementById('maxZoomRange');
+    
+    // FPS controls
+    const fpsInput = document.getElementById('fpsInput');
+    const fpsRange = document.getElementById('fpsRange');
+    const maxFpsInput = document.getElementById('maxFpsInput');
+
+    const manualCanvas = document.getElementById('manualCanvas');
+    const autoplayCanvas = document.getElementById('autoplayCanvas');
+    const manualCtx = manualCanvas.getContext('2d');
+    const autoplayCtx = autoplayCanvas.getContext('2d');
+
+    let view = {
+      manual: { zoom: 1, panX: 0, panY: 0, scale: 1, offsetX: 0, offsetY: 0 },
+      auto:   { zoom: 1, panX: 0, panY: 0, scale: 1, offsetX: 0, offsetY: 0 }
+    };
+
+    // Set initial canvas dimensions based on wrapper size
+    function resizeCanvases() {
+      const manualWrapper = manualCanvas.parentElement;
+      const autoWrapper = autoplayCanvas.parentElement;
+      
+      const containerWidth = document.querySelector('.canvas-container').clientWidth;
+      const wrapperWidth = Math.min(
+        (containerWidth - 20) / 2,
+        window.innerWidth * 0.45
+      );
+      
+      manualWrapper.style.width = `${wrapperWidth}px`;
+      autoWrapper.style.width = `${wrapperWidth}px`;
+      
+      manualCanvas.width = wrapperWidth;
+      manualCanvas.height = manualWrapper.clientHeight;
+      autoplayCanvas.width = wrapperWidth;
+      autoplayCanvas.height = autoWrapper.clientHeight;
+      
+      drawManualFrame();
+      drawAutoFrame();
+    }
+
+    // Initialize and listen for window resize
+    window.addEventListener('load', resizeCanvases);
+    window.addEventListener('resize', resizeCanvases);
+
+    // Zoom controls synchronization
+    function syncZoomControls() {
+      minZoomRange.value = minZoom;
+      minZoomInput.value = minZoom;
+      maxZoomRange.value = maxZoom;
+      maxZoomInput.value = maxZoom;
+    }
+
+    // FPS controls synchronization
+    function syncFpsControls() {
+      fpsRange.value = fps;
+      fpsInput.value = fps;
+      maxFpsInput.value = maxFps;
+      fpsRange.max = maxFps;
+    }
+
+    // Initialize controls
+    syncZoomControls();
+    syncFpsControls();
+
+    // Zoom control event listeners
+    minZoomInput.addEventListener('input', () => {
+      minZoom = parseFloat(minZoomInput.value);
+      minZoomRange.value = minZoom;
+    });
+
+    minZoomRange.addEventListener('input', () => {
+      minZoom = parseFloat(minZoomRange.value);
+      minZoomInput.value = minZoom;
+    });
+
+    maxZoomInput.addEventListener('input', () => {
+      maxZoom = parseFloat(maxZoomInput.value);
+      maxZoomRange.value = maxZoom;
+    });
+
+    maxZoomRange.addEventListener('input', () => {
+      maxZoom = parseFloat(maxZoomRange.value);
+      maxZoomInput.value = maxZoom;
+    });
+
+    // FPS control event listeners
+    fpsInput.addEventListener('input', () => {
+      fps = Math.min(parseInt(fpsInput.value), maxFps);
+      fpsRange.value = fps;
+      fpsInput.value = fps;
+      restartAutoplay();
+    });
+
+    fpsRange.addEventListener('input', () => {
+      fps = parseInt(fpsRange.value);
+      fpsInput.value = fps;
+      restartAutoplay();
+    });
+
+    maxFpsInput.addEventListener('input', () => {
+      maxFps = parseInt(maxFpsInput.value);
+      fpsRange.max = maxFps;
+      if (fps > maxFps) {
+        fps = maxFps;
+        fpsInput.value = fps;
+        fpsRange.value = fps;
+        restartAutoplay();
+      }
+    });
+
+    frameSlider.addEventListener('input', () => {
+      const target = parseInt(frameSlider.value);
+      if (!isNaN(target) && target >= 1 && target <= frames.length) {
+        currentFrame = target - 1;
+        autoFrame = currentFrame;
+        drawManualFrame();
+        drawAutoFrame();
+      }
+    });
+
+    async function loadWebP(file) {
+      const buffer = await file.arrayBuffer();
+      const decoder = new ImageDecoder({ data: buffer, type: 'image/webp' });
+      await decoder.tracks.ready;
+
+      const frameCount = decoder.tracks.selectedTrack.frameCount;
+      frames = [];
+      delays = [];
+
+      let totalDelay = 0;
+      for (let i = 0; i < frameCount; i++) {
+        const { image, duration } = await decoder.decode({ frameIndex: i });
+        const bitmap = await createImageBitmap(image);
+        frames.push(bitmap);
+        delays.push(duration || 100);
+        totalDelay += duration || 100;
+        image.close();
+      }
+
+      fps = Math.round(1000 / (totalDelay / frameCount));
+      fps = Math.max(1, Math.min(maxFps, fps));
+      syncFpsControls();
+      restartAutoplay();
+
+      frameSlider.max = frames.length;
+      frameSlider.value = 1;
+      totalFramesLabel.textContent = frames.length;
+      currentFrame = 0;
+      autoFrame = 0;
+      resetView('manual');
+      resetView('auto');
+      drawManualFrame();
+    }
+
+    function loadMP4(file) {
+      const video = document.createElement('video');
+      video.src = URL.createObjectURL(file);
+      video.load();
+      video.onloadedmetadata = async () => {
+        const fps = 30;
+        const duration = video.duration;
+        const totalFrames = Math.floor(duration * fps);
+
+        const canvasTemp = document.createElement('canvas');
+        const ctxTemp = canvasTemp.getContext('2d');
+        canvasTemp.width = video.videoWidth;
+        canvasTemp.height = video.videoHeight;
+
+        frames = [];
+        currentFrame = 0;
+        for (let i = 0; i < totalFrames; i++) {
+          video.currentTime = i / fps;
+          await new Promise(res => video.onseeked = res);
+          ctxTemp.drawImage(video, 0, 0);
+          const bitmap = await createImageBitmap(canvasTemp);
+          frames.push(bitmap);
+        }
+
+        frameSlider.max = frames.length;
+        frameSlider.value = 1;
+        totalFramesLabel.textContent = frames.length;
+        currentFrame = 0;
+        autoFrame = 0;
+        resetView('manual');
+        resetView('auto');
+        drawManualFrame();
+        restartAutoplay();
+      };
+    }
+
+    function drawCanvas(canvas, ctx, frameIdx, viewData, infoElem) {
+      if (frameIdx >= frames.length) return;
+      const bmp = frames[frameIdx];
+      
+      const bmpAspect = bmp.width / bmp.height;
+      const canvasAspect = canvas.width / canvas.height;
+      
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      let scale = 1;
+      let offsetX = 0;
+      let offsetY = 0;
+      
+      if (bmpAspect > canvasAspect) {
+        scale = canvas.width / bmp.width;
+        offsetY = (canvas.height - bmp.height * scale) / 2;
+      } else {
+        scale = canvas.height / bmp.height;
+        offsetX = (canvas.width - bmp.width * scale) / 2;
+      }
+      
+      viewData.scale = scale;
+      viewData.offsetX = offsetX;
+      viewData.offsetY = offsetY;
+      
+      const userScale = viewData.zoom;
+      const userPanX = viewData.panX;
+      const userPanY = viewData.panY;
+      
+      ctx.setTransform(
+        scale * userScale, 
+        0, 
+        0, 
+        scale * userScale, 
+        offsetX + userPanX, 
+        offsetY + userPanY
+      );
+      
+      ctx.drawImage(bmp, 0, 0);
+      infoElem.textContent = `Frame ${frameIdx + 1} / ${frames.length}`;
+    }
+
+    function drawManualFrame() {
+      if (!frames.length) return;
+      drawCanvas(manualCanvas, manualCtx, currentFrame, view.manual, currentFrameLabel);
+      frameSlider.value = currentFrame + 1;
+      currentFrameLabel.textContent = currentFrame + 1;
+    }
+
+    function drawAutoFrame() {
+      if (!frames.length) return;
+      drawCanvas(autoplayCanvas, autoplayCtx, autoFrame, view.auto, autoplayInfo);
+      autoFrame = (autoFrame + 1) % frames.length;
+    }
+
+    function nextFrame() {
+      if (frames.length === 0) return;
+      currentFrame = (currentFrame + 1) % frames.length;
+      drawManualFrame();
+    }
+
+    function prevFrame() {
+      if (frames.length === 0) return;
+      currentFrame = (currentFrame - 1 + frames.length) % frames.length;
+      drawManualFrame();
+    }
+
+    function restartAutoplay() {
+      clearInterval(autoplayTimer);
+      if (frames.length > 0) {
+        autoplayTimer = setInterval(drawAutoFrame, 1000 / fps);
+      }
+    }
+
+    function startPress(dir) {
+      pressTimer = setTimeout(() => {
+        isPressing = true;
+        fastInterval = setInterval(dir === 'next' ? nextFrame : prevFrame, 1000 / fps);
+      }, 444);
+    }
+
+    function endPress(dir) {
+      clearTimeout(pressTimer);
+      if (!isPressing) {
+        dir === 'next' ? nextFrame() : prevFrame();
+      }
+      isPressing = false;
+      clearInterval(fastInterval);
+    }
+
+    document.addEventListener('keydown', e => {
+      if (e.key === 'ArrowLeft') prevFrame();
+      else if (e.key === 'ArrowRight') nextFrame();
+    });
+
+    function setupCanvasZoomPan(canvas, ctx, viewData, drawFn) {
+      let dragging = false, lastX = 0, lastY = 0;
+
+      canvas.addEventListener('wheel', e => {
+        e.preventDefault();
+        const scaleFactor = 1.1;
+        const rect = canvas.getBoundingClientRect();
+        
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        
+        const imgX = (mouseX - viewData.offsetX - viewData.panX) / (viewData.scale * viewData.zoom);
+        const imgY = (mouseY - viewData.offsetY - viewData.panY) / (viewData.scale * viewData.zoom);
+        
+        const oldZoom = viewData.zoom;
+        viewData.zoom *= e.deltaY < 0 ? scaleFactor : 1 / scaleFactor;
+        
+        // Only enforce min/max during zoom operation, not when setting values
+        if (e.deltaY < 0) {
+          viewData.zoom = Math.min(viewData.zoom, maxZoom);
+        } else {
+          viewData.zoom = Math.max(viewData.zoom, minZoom);
+        }
+        
+        viewData.panX = mouseX - viewData.offsetX - imgX * viewData.scale * viewData.zoom;
+        viewData.panY = mouseY - viewData.offsetY - imgY * viewData.scale * viewData.zoom;
+        
+        drawFn();
+      });
+
+      canvas.addEventListener('mousedown', e => {
+        dragging = true;
+        lastX = e.offsetX;
+        lastY = e.offsetY;
+      });
+
+      canvas.addEventListener('mousemove', e => {
+        if (!dragging) return;
+        viewData.panX += e.offsetX - lastX;
+        viewData.panY += e.offsetY - lastY;
+        lastX = e.offsetX;
+        lastY = e.offsetY;
+        drawFn();
+      });
+
+      canvas.addEventListener('mouseup', () => dragging = false);
+      canvas.addEventListener('mouseleave', () => dragging = false);
+
+      canvas.addEventListener('dblclick', () => {
+        resetView(viewData === view.manual ? 'manual' : 'auto');
+        drawFn();
+      });
+    }
+
+    function resetView(target) {
+      view[target].zoom = 1;
+      view[target].panX = 0;
+      view[target].panY = 0;
+    }
+
+    setupCanvasZoomPan(manualCanvas, manualCtx, view.manual, drawManualFrame);
+    setupCanvasZoomPan(autoplayCanvas, autoplayCtx, view.auto, drawAutoFrame);
+
+    document.getElementById('fileInput').addEventListener('change', e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      if (file.type === 'image/webp') {
+        isWebP = true;
+        loadWebP(file);
+      } else if (file.type === 'video/mp4') {
+        isWebP = false;
+        loadMP4(file);
+      } else {
+        alert('Please select a valid file.');
+      }
+    });
+
+    document.getElementById('downloadButton').addEventListener('click', () => {
+      if (!frames.length) return;
+      const bmp = frames[currentFrame];
+      const viewData = view.manual;
+
+      // Create a temporary canvas with the same dimensions as the original frame
+      const tempCanvas = document.createElement('canvas');
+      const tempCtx = tempCanvas.getContext('2d');
+      tempCanvas.width = bmp.width;
+      tempCanvas.height = bmp.height;
+
+      // Calculate the scale and offset from the view
+      const scale = viewData.scale * viewData.zoom;
+      const offsetX = viewData.offsetX;
+      const offsetY = viewData.offsetY;
+      const panX = viewData.panX;
+      const panY = viewData.panY;
+
+      // Calculate the visible rectangle in image coordinates
+      const canvasWidth = manualCanvas.width;
+      const canvasHeight = manualCanvas.height;
+      
+      // Convert canvas corners to image coordinates
+      const topLeft = {
+        x: (-panX - offsetX) / scale,
+        y: (-panY - offsetY) / scale
+      };
+      
+      const bottomRight = {
+        x: (canvasWidth - panX - offsetX) / scale,
+        y: (canvasHeight - panY - offsetY) / scale
+      };
+
+      // Calculate dimensions of the visible area in image coordinates
+      const visibleWidth = bottomRight.x - topLeft.x;
+      const visibleHeight = bottomRight.y - topLeft.y;
+
+      // Calculate the source rectangle (clamped to image bounds)
+      const sourceX = Math.max(0, topLeft.x);
+      const sourceY = Math.max(0, topLeft.y);
+      const sourceWidth = Math.min(bmp.width, visibleWidth, bmp.width - sourceX);
+      const sourceHeight = Math.min(bmp.height, visibleHeight, bmp.height - sourceY);
+
+      // Calculate the aspect ratio of the visible portion
+      const visibleAspect = sourceWidth / sourceHeight;
+      
+      // Set the output dimensions to match the source aspect ratio
+      tempCanvas.width = sourceWidth;
+      tempCanvas.height = sourceHeight;
+
+      // Draw the visible portion of the image
+      tempCtx.setTransform(1, 0, 0, 1, 0, 0);
+      tempCtx.clearRect(0, 0, tempCanvas.width, tempCanvas.height);
+      tempCtx.drawImage(
+        bmp,
+        sourceX, sourceY, // source x, y
+        sourceWidth, sourceHeight, // source width, height
+        0, 0, // destination x, y
+        tempCanvas.width, tempCanvas.height // destination width, height
+      );
+
+      const link = document.createElement('a');
+      link.href = tempCanvas.toDataURL();
+      link.download = `frame_${currentFrame + 1}.png`;
+      link.click();
+    });
+
+    window.addEventListener('dragover', e => {
+      e.preventDefault();
+    });
+
+    window.addEventListener('drop', e => {
+      e.preventDefault();
+      const file = e.dataTransfer.files[0];
+      if (!file) return;
+      if (file.type === 'image/webp') loadWebP(file);
+      else if (file.type === 'video/mp4') loadMP4(file);
+      else alert('Please select a valid file.');
+    });
+  </script>
+</body>
+</html>
