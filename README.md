@@ -4,6 +4,12 @@ Javascript based manual frame browser / player for short animations.
 I have so far been unable to find a free, precise, convenient player for frame by frame, particularly for genned videos; potplayer, mpebc, vlc - it's a very tacked on feature for all of these.
 So instead I had gepetto write one to spec in browser.
 
+## V2 - Server (open / open with directly in windows)
+Now the browser is accessible through a flask server, so that any file can be loaded directly by passing its path in the url.
+The FrameByFrame.bat file loads this url, and can be compiled to a proper app using [batch to exe](https://github.com/l-urk/Bat-To-Exe-Converter-64-Bit/releases).
+Meaning, you can "open with" any file in the system, or set it as the default app for a filetype (mp4 or webp presumably), and it'll open a page immediately.
+The server just needs to run in the background to supply the files; index.html supports all existing features with additional file parameter on load.
+
 ## General features
 - Support for modern chromium browsers (chrome, brave). Firefox kinda works, not all features fully functional on my end. Possibly edge, but who cares.
 - Support for (short) mp4 and webp - video frames are fully prerendered so quite memory intensive for >30s.
